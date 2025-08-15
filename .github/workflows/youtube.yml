@@ -8,7 +8,7 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "2-59/5 * * * *"   # toutes les 5 min décalées (2,7,12,17,…)
+    - cron: "2-59/5 * * * *"
 
 permissions:
   contents: write
@@ -35,7 +35,8 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install youtube-upload google-api-python-client google-auth google-auth-oauthlib
+          pip install "google-api-python-client" "oauth2client" "progressbar2"
+          pip install "git+https://github.com/tokland/youtube-upload.git"
 
       - name: Write YouTube OAuth files (from secrets)
         run: |
