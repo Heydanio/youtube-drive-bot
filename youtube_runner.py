@@ -12,42 +12,36 @@ from googleapiclient.http import MediaIoBaseDownload
 # =======================
 #   CONFIG UTILISATEUR
 # =======================
-# Descriptions & tags de base (ajoute/édite à ta guise)
 DESCRIPTIONS = [
     "Clip rapide ⚡ #Shorts",
     "Shorts auto depuis Drive 🚀",
 ]
 DEFAULT_TAGS = ["shorts", "fun", "fr"]
-DEFAULT_PRIVACY = "public"  # public | unlisted | private
-# Catégorie YouTube: accepte nom "Entertainment" OU ID "24"
-YOUTUBE_CATEGORY = "24"     # "24" = Entertainment (plus robuste que "22")
+DEFAULT_PRIVACY = "public"          # public | unlisted | private
+YOUTUBE_CATEGORY_NAME = "Entertainment"   # 👈 utiliser le NOM (pas l'ID)
 
 # =======================
 #   ETAT LOCAL (versionné)
 # =======================
-USED_FILE     = Path("state/yt_used.json")       # vidéos déjà uploadées (IDs Drive)
-SCHEDULE_FILE = Path("state/yt_schedule.json")   # planning tiré pour la journée
+USED_FILE     = Path("state/yt_used.json")
+SCHEDULE_FILE = Path("state/yt_schedule.json")
 
 # =======================
 #   CRENEAUX JOURNALIERS
 # =======================
-PARIS_TZ     = ZoneInfo("Europe/Paris")
-SLOTS_HOURS  = [8, 11, 14, 17, 20]         # heures fixes FR
-MINUTES_GRID = list(range(0, 60, 5))       # minutes possibles: 0,5,10,...,55
-GRACE_MINUTES = 10                         # tolérance de retard
+PARIS_TZ      = ZoneInfo("Europe/Paris")
+SLOTS_HOURS   = [8, 11, 14, 17, 20]
+MINUTES_GRID  = list(range(0, 60, 5))
+GRACE_MINUTES = 10
 
 # =======================
 #   SECRETS / ENV
 # =======================
-# Le workflow passe ces variables :
-# - GDRIVE_FOLDER_IDS   : "id1,id2,..." (pour YouTube on réutilise ce nom)
-# - GDRIVE_SA_JSON_B64  : service account json en base64
-# - (les fichiers OAuth YouTube sont écrits par le workflow à la racine)
-FOLDER_IDS = [s.strip() for s in os.environ["GDRIVE_FOLDER_IDS"].split(",") if s.strip()]
-SA_JSON_B64 = os.environ["GDRIVE_SA_JSON_B64"]
+FOLDER_IDS   = [s.strip() for s in os.environ["GDRIVE_FOLDER_IDS"].split(",") if s.strip()]
+SA_JSON_B64  = os.environ["GDRIVE_SA_JSON_B64"]
 
 # =======================
-#   PETITES UTILS
+#   UTILS
 # =======================
 def _load_json(path: Path, default):
     if path.exists():
@@ -69,7 +63,8 @@ def load_schedule():  return _load_json(SCHEDULE_FILE, {"date": None, "slots": [
 def save_schedule(d): _save_json(SCHEDULE_FILE, d)
 
 def ensure_today_schedule():
-    today = datetime.now(PARIS_TZ).date().isoformat()
+    now = datetime.now(PARIS_TZ)
+    today = now.date().isoformat()
     sch = load_schedule()
     if sch.get("date") != today or not sch.get("slots"):
         random.seed()
@@ -88,8 +83,7 @@ def should_post_now(sch):
     for slot in sch["slots"]:
         if slot.get("posted"):
             continue
-        slot_dt = datetime(year=today.year, month=today.month, day=today.day,
-                           hour=slot["hour"], minute=slot["minute"], tzinfo=PARIS_TZ)
+        slot_dt = datetime(today.year, today.month, today.day, slot["hour"], slot["minute"], tzinfo=PARIS_TZ)
         if slot_dt <= now < (slot_dt + timedelta(minutes=GRACE_MINUTES)):
             delay = int((now - slot_dt).total_seconds() // 60)
             if delay > 0:
@@ -117,8 +111,7 @@ def list_videos_in_folder(svc, folder_id: str) -> List[dict]:
         resp = svc.files().list(q=q, spaces="drive", fields=f"nextPageToken,{fields}", pageToken=page_token).execute()
         out.extend(resp.get("files", []))
         page_token = resp.get("nextPageToken")
-        if not page_token:
-            break
+        if not page_token: break
     return [f for f in out if f["name"].lower().endswith((".mp4", ".mov", ".m4v", ".webm"))]
 
 def list_all_videos(svc) -> List[dict]:
@@ -130,7 +123,7 @@ def list_all_videos(svc) -> List[dict]:
 def pick_one(files: List[dict], used_ids: List[str]) -> dict | None:
     remaining = [f for f in files if f["id"] not in used_ids]
     if not remaining:
-        used_ids.clear()      # tout épuisé → on repart
+        used_ids.clear()
         remaining = files[:]
     random.shuffle(remaining)
     return remaining[0] if remaining else None
@@ -148,9 +141,8 @@ def download_file(svc, file_id: str, dest: Path):
 # =======================
 #   YOUTUBE UPLOAD
 # =======================
-TITLE_MAX = 100  # limite YouTube
+TITLE_MAX = 100
 def sanitize_title(name: str) -> str:
-    # Nettoie un titre trop long et enlève extension
     name_no_ext = re.sub(r"\.[A-Za-z0-9]{2,4}$", "", name)
     title = re.sub(r"\s+", " ", name_no_ext).strip()
     if len(title) > TITLE_MAX:
@@ -158,33 +150,43 @@ def sanitize_title(name: str) -> str:
     return title
 
 def run_upload(local_path: Path, title: str, description: str, tags: List[str]):
-    # On passe une catégorie fiable: 24 = Entertainment
-    cmd = [
+    base_cmd = [
         "youtube-upload",
         "--client-secrets", "client_secrets.json",
         "--credentials-file", "youtube_credentials.json",
         "--title", title,
         "--description", description,
         "--tags", ",".join(tags),
-        "--category", str(YOUTUBE_CATEGORY),
         "--privacy", DEFAULT_PRIVACY,
         str(local_path),
     ]
-    print("RUN:", " ".join(cmd))
-    # On laisse remonter le code de retour (raise si !=0)
-    subprocess.run(cmd, check=True)
+
+    # 1) tentative avec catégorie par NOM
+    cmd1 = base_cmd.copy()
+    cmd1[0:0] = []  # no-op lisible
+    cmd1.insert(7, YOUTUBE_CATEGORY_NAME)         # valeur
+    cmd1.insert(7, "--category")                  # option
+    print("RUN (with category name):", " ".join(cmd1))
+    try:
+        subprocess.run(cmd1, check=True)
+        return
+    except subprocess.CalledProcessError as e:
+        print("⚠️ Échec avec catégorie par nom:", e)
+
+    # 2) tentative sans catégorie (fallback)
+    cmd2 = base_cmd
+    print("RUN (fallback without category):", " ".join(cmd2))
+    subprocess.run(cmd2, check=True)
 
 # =======================
 #   MAIN
 # =======================
 def main():
-    # Log simple pour suivre la cadence
     now = datetime.now(PARIS_TZ)
     sch = ensure_today_schedule()
     print(f"🫀 Passage cron: {now:%Y-%m-%d %H:%M:%S} (Europe/Paris)")
     slot = should_post_now(sch)
 
-    # Mode test (Run workflow → force=true dans GitHub Actions)
     if not slot and os.environ.get("FORCE_POST") == "1":
         slot = {"hour": 99, "minute": 99, "posted": False}
 
@@ -206,8 +208,7 @@ def main():
 
     tmpdir = Path(tempfile.mkdtemp())
     local = tmpdir / chosen["name"]
-    print("⬇️ Téléchargement…")
-    download_file(svc, chosen["id"], local)
+    print("⬇️ Téléchargement…"); download_file(svc, chosen["id"], local)
 
     title = sanitize_title(chosen["name"])
     desc = random.choice(DESCRIPTIONS)
