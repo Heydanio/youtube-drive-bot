@@ -88,7 +88,7 @@ SCHEDULE_FILE = Path("state/yt_schedule.json")
 PARIS_TZ      = ZoneInfo("Europe/Paris")
 SLOTS_HOURS   = [8, 11, 14, 17, 20]
 MINUTES_GRID  = list(range(0, 60, 5))
-GRACE_MINUTES = 10
+GRACE_MINUTES = 20
 
 # =======================
 #   SECRETS / ENV
