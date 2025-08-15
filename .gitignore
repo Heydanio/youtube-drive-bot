@@ -205,3 +205,34 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# 🔒 Fichiers de clés et identifiants sensibles
+client_secrets.json
+youtube_credentials.json
+service_account.json
+*.pem
+*.key
+*.p12
+
+# 🔒 Clés API et cookies
+config.txt
+CookiesDir/
+*.cookie
+
+# 🔒 États et historiques internes
+state/
+tmp/
+temp/
+__pycache__/
+*.pyc
+
+# 🔒 Dossiers temporaires
+VideosDirPath/
+downloads/
+output/
+logs/
+
+# 🔒 Fichiers secrets en base64
+*_B64.txt
+secrets.txt
+
