@@ -4,15 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Forcer un post immédiat pour ce run"
+        description: "Forcer un post immédiat pour CE run"
         type: boolean
         default: false
   schedule:
+    # Passe toutes les 5 minutes (02,07,12,… : petit décalage pour éviter la minute pile)
     - cron: "2-59/5 * * * *"
 
 permissions:
   contents: write
 
+# Empêche 2 runs YouTube de se marcher dessus
 concurrency:
   group: youtube-post
   cancel-in-progress: false
@@ -20,11 +22,12 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Random jitter (0-30s)
+      - name: Random jitter (0–30s)
         run: sleep $((RANDOM % 30))
 
       - name: Set up Python
@@ -32,27 +35,33 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install deps (youtube-upload depuis GitHub)
         run: |
           python -m pip install --upgrade pip
           pip install "google-api-python-client" "oauth2client" "progressbar2"
           pip install "git+https://github.com/tokland/youtube-upload.git"
 
+      # On reconstitue les 2 fichiers OAuth depuis les secrets
       - name: Write YouTube OAuth files (from secrets)
         run: |
           echo "${{ secrets.YT_CLIENT_SECRETS_JSON_B64 }}" | base64 -d > client_secrets.json
-          echo "${{ secrets.YT_CREDENTIALS_JSON_B64 }}" | base64 -d > youtube_credentials.json
+          echo "${{ secrets.YT_CREDENTIALS_JSON_B64 }}"   | base64 -d > youtube_credentials.json
+          echo "Using client secrets: client_secrets.json"
+          echo "Using credentials file: youtube_credentials.json"
 
+      # Option "forcer le post" quand on déclenche manuellement
       - name: Enable FORCE_POST if requested
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force == 'true' }}
         run: echo "FORCE_POST=1" >> $GITHUB_ENV
 
       - name: Run YouTube runner
         env:
-          GDRIVE_SA_JSON_B64: ${{ secrets.GDRIVE_SA_JSON_B64 }}
+          # Le script lit GDRIVE_FOLDER_IDS et GDRIVE_SA_JSON_B64
           GDRIVE_FOLDER_IDS:  ${{ secrets.GDRIVE_FOLDER_IDS_YT }}
+          GDRIVE_SA_JSON_B64: ${{ secrets.GDRIVE_SA_JSON_B64 }}
         run: python youtube_runner.py
 
+      # On nettoie les fichiers sensibles et on versionne l'état si modifié
       - name: Commit state if changed
         run: |
           rm -f client_secrets.json youtube_credentials.json
