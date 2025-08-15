@@ -12,13 +12,69 @@ from googleapiclient.http import MediaIoBaseDownload
 # =======================
 #   CONFIG UTILISATEUR
 # =======================
+import random  # (en haut du fichier il est déjà importé, sinon garde-le)
+
+# Gros pool de descriptions variées — YouTube détecte #Shorts dans titre/desc
 DESCRIPTIONS = [
     "Clip rapide ⚡ #Shorts",
-    "Shorts auto depuis Drive 🚀",
+    "Best moment du jour 🎯 #Shorts",
+    "Tu t’y attendais pas 😅 #Shorts",
+    "Insolite mais vrai 🤯 #Shorts",
+    "Petit shot de dopamine ⚡ #Shorts",
+    "Ça régale 🔥 #Shorts",
+    "Moment satisfaisant ✨ #Shorts",
+    "Tu valides ? 👀 #Shorts",
+    "C’était obligé 😂 #Shorts",
+    "On en parle ? 🤔 #Shorts",
+    "Tellement vrai… 😭 #Shorts",
+    "Coup de pression 😮‍💨 #Shorts",
+    "Le move qu’il fallait 💪 #Shorts",
+    "Ça part trop loin 🤡 #Shorts",
+    "T’as déjà vu ça ? 👇 #Shorts",
+    "Inattendu jusqu’à la fin 👇 #Shorts",
+    "Rage quit imminent 😤 #Shorts",
+    "Montage express 🎬 #Shorts",
+    "Compilation instantanée ⚡ #Shorts",
+    "Le clutch parfait 🧠 #Shorts",
+    "Ça passe crème 😎 #Shorts",
+    "Try not to laugh 😆 #Shorts",
+    "Le karma instantané ☄️ #Shorts",
+    "On refait ? 🙃 #Shorts",
+    "C’est validé ou pas ? ✅ #Shorts",
+    "Moment magique ✨ #Shorts",
+    "Ça part en vrille 😂 #Shorts",
+    "Le détail qui tue 👀 #Shorts",
+    "POV: tu découvres ça 🤯 #Shorts",
+    "Propre et sans bavure 🧼 #Shorts",
+    "Stop au scroll 👉 regarde ça #Shorts",
+    "Le meilleur passage 😍 #Shorts",
+    "J’en reviens pas 😳 #Shorts",
+    "En une prise 🔥 #Shorts",
+    "Le combo parfait 🧩 #Shorts",
+    "Tu t’y attendais ? 😏 #Shorts",
+    "Moment culte 🤌 #Shorts",
+    "Ça devrait être illégal 😅 #Shorts",
+    "Tu like, tu partages 🙏 #Shorts",
+    "On en fait un autre ? 🤝 #Shorts",
 ]
-DEFAULT_TAGS = ["shorts", "fun", "fr"]
+
+# Gros pool de tags (sans # — YouTube tags sont des mots-clés)
+TAGS_POOL = [
+    "shorts","humour","drôle","fun","fr","tendance","viral","meme","montage","clip",
+    "gaming","stream","twitch","moments","compilation","edit","capcut","reaction","lol","wtf",
+    "trend","bestof","france","entertainment","amusant","buzz","highlight","clutch","fails","win",
+    "asmr","music","beat","challenge","ironie","parodie","sketch","storytime","live","popculture",
+    "anime","manga","film","serie","geek","setup","tips","astuces","howto","inspiration"
+]
+
 DEFAULT_PRIVACY = "public"          # public | unlisted | private
-YOUTUBE_CATEGORY_NAME = "Entertainment"   # 👈 utiliser le NOM (pas l'ID)
+YOUTUBE_CATEGORY_NAME = "Entertainment"   # utiliser le NOM de la catégorie
+
+def pick_tags(pool, min_n=3, max_n=8):
+    """Sélectionne un nombre aléatoire de tags uniques depuis le pool."""
+    n = random.randint(min_n, max_n)
+    n = min(n, len(pool))
+    return random.sample(pool, n)
 
 # =======================
 #   ETAT LOCAL (versionné)
@@ -212,11 +268,13 @@ def main():
 
     title = sanitize_title(chosen["name"])
     desc = random.choice(DESCRIPTIONS)
+    tags = pick_tags(TAGS_POOL, 4, 10)  # par ex. 4 à 10 tags à chaque fois
     print(f"📝 Titre: {title}")
     print(f"📝 Description: {desc}")
+    print(f"🏷️ Tags: {', '.join(tags)}")
 
     try:
-        run_upload(local, title, desc, DEFAULT_TAGS)
+        run_upload(local, title, desc, tags)
         used["used_ids"].append(chosen["id"]); save_used(used)
         mark_posted(sch, slot)
         print("✅ Upload OK — état/plan du jour mis à jour.")
