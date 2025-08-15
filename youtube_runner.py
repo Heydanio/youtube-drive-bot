@@ -1,5 +1,5 @@
-# youtube_runner.py — 5 créneaux/jour (FR) + upload YouTube Shorts via youtube-upload
-import base64, io, json, os, random, subprocess, sys, tempfile
+# youtube_runner.py — Google Drive → YouTube Shorts, 5 créneaux/jour (heure FR)
+import base64, io, json, os, random, subprocess, sys, tempfile, re
 from pathlib import Path
 from typing import List
 from datetime import datetime, timedelta
@@ -9,30 +9,52 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-PARIS_TZ = ZoneInfo("Europe/Paris")
-SLOTS_HOURS  = [8, 11, 14, 17, 20]
-MINUTES_GRID = list(range(0, 60, 5))
-GRACE_MINUTES = 10
-
-FOLDER_IDS   = [s.strip() for s in os.environ["GDRIVE_FOLDER_IDS"].split(",") if s.strip()]
-SA_JSON_B64  = os.environ["GDRIVE_SA_JSON_B64"]
-
-CLIENT_SECRETS = Path("client_secrets.json")
-CREDENTIALS    = Path("youtube_credentials.json")
-
+# =======================
+#   CONFIG UTILISATEUR
+# =======================
+# Descriptions & tags de base (ajoute/édite à ta guise)
 DESCRIPTIONS = [
-    "Compilation du jour #Shorts",
-    "Moment fort — abonne-toi ! #Shorts",
     "Clip rapide ⚡ #Shorts",
+    "Shorts auto depuis Drive 🚀",
 ]
+DEFAULT_TAGS = ["shorts", "fun", "fr"]
+DEFAULT_PRIVACY = "public"  # public | unlisted | private
+# Catégorie YouTube: accepte nom "Entertainment" OU ID "24"
+YOUTUBE_CATEGORY = "24"     # "24" = Entertainment (plus robuste que "22")
 
-USED_FILE     = Path("state/yt_used.json")
-SCHEDULE_FILE = Path("state/yt_schedule.json")
+# =======================
+#   ETAT LOCAL (versionné)
+# =======================
+USED_FILE     = Path("state/yt_used.json")       # vidéos déjà uploadées (IDs Drive)
+SCHEDULE_FILE = Path("state/yt_schedule.json")   # planning tiré pour la journée
 
+# =======================
+#   CRENEAUX JOURNALIERS
+# =======================
+PARIS_TZ     = ZoneInfo("Europe/Paris")
+SLOTS_HOURS  = [8, 11, 14, 17, 20]         # heures fixes FR
+MINUTES_GRID = list(range(0, 60, 5))       # minutes possibles: 0,5,10,...,55
+GRACE_MINUTES = 10                         # tolérance de retard
+
+# =======================
+#   SECRETS / ENV
+# =======================
+# Le workflow passe ces variables :
+# - GDRIVE_FOLDER_IDS   : "id1,id2,..." (pour YouTube on réutilise ce nom)
+# - GDRIVE_SA_JSON_B64  : service account json en base64
+# - (les fichiers OAuth YouTube sont écrits par le workflow à la racine)
+FOLDER_IDS = [s.strip() for s in os.environ["GDRIVE_FOLDER_IDS"].split(",") if s.strip()]
+SA_JSON_B64 = os.environ["GDRIVE_SA_JSON_B64"]
+
+# =======================
+#   PETITES UTILS
+# =======================
 def _load_json(path: Path, default):
     if path.exists():
-        try: return json.loads(path.read_text(encoding="utf-8"))
-        except Exception: return default
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
     return default
 
 def _save_json(path: Path, payload):
@@ -57,16 +79,17 @@ def ensure_today_schedule():
             slots.append({"hour": h, "minute": m, "posted": False})
         sch = {"date": today, "slots": slots}
         save_schedule(sch)
-        picked = ", ".join(f"{s['hour']:02d}:{s['minute']:02d}" for s in slots)
-        print(f"📅 Planning du {today} (Europe/Paris) → {picked}")
+        print(f"📅 Planning du {today} (Europe/Paris) → " + ", ".join(f"{s['hour']:02d}:{s['minute']:02d}" for s in slots))
     return sch
 
 def should_post_now(sch):
     now = datetime.now(PARIS_TZ)
     today = now.date()
     for slot in sch["slots"]:
-        if slot.get("posted"): continue
-        slot_dt = datetime(today.year, today.month, today.day, slot["hour"], slot["minute"], tzinfo=PARIS_TZ)
+        if slot.get("posted"):
+            continue
+        slot_dt = datetime(year=today.year, month=today.month, day=today.day,
+                           hour=slot["hour"], minute=slot["minute"], tzinfo=PARIS_TZ)
         if slot_dt <= now < (slot_dt + timedelta(minutes=GRACE_MINUTES)):
             delay = int((now - slot_dt).total_seconds() // 60)
             if delay > 0:
@@ -78,6 +101,9 @@ def mark_posted(sch, slot):
     slot["posted"] = True
     save_schedule(sch)
 
+# =======================
+#   GOOGLE DRIVE
+# =======================
 def drive_service():
     sa_json = json.loads(base64.b64decode(SA_JSON_B64).decode("utf-8"))
     creds = Credentials.from_service_account_info(sa_json, scopes=["https://www.googleapis.com/auth/drive.readonly"])
@@ -91,8 +117,9 @@ def list_videos_in_folder(svc, folder_id: str) -> List[dict]:
         resp = svc.files().list(q=q, spaces="drive", fields=f"nextPageToken,{fields}", pageToken=page_token).execute()
         out.extend(resp.get("files", []))
         page_token = resp.get("nextPageToken")
-        if not page_token: break
-    return [f for f in out if f["name"].lower().endswith((".mp4",".mov",".m4v",".webm"))]
+        if not page_token:
+            break
+    return [f for f in out if f["name"].lower().endswith((".mp4", ".mov", ".m4v", ".webm"))]
 
 def list_all_videos(svc) -> List[dict]:
     allv = []
@@ -103,7 +130,7 @@ def list_all_videos(svc) -> List[dict]:
 def pick_one(files: List[dict], used_ids: List[str]) -> dict | None:
     remaining = [f for f in files if f["id"] not in used_ids]
     if not remaining:
-        used_ids.clear()
+        used_ids.clear()      # tout épuisé → on repart
         remaining = files[:]
     random.shuffle(remaining)
     return remaining[0] if remaining else None
@@ -118,33 +145,51 @@ def download_file(svc, file_id: str, dest: Path):
         if status:
             print(f"Téléchargement {int(status.progress()*100)}%")
 
-def run_youtube_upload(local_path: Path, title: str, desc: str, tags: list[str]):
-    if "#Shorts" not in title and "#Shorts" not in desc and "#shorts" not in desc.lower():
-        desc = (desc + " #Shorts").strip()
+# =======================
+#   YOUTUBE UPLOAD
+# =======================
+TITLE_MAX = 100  # limite YouTube
+def sanitize_title(name: str) -> str:
+    # Nettoie un titre trop long et enlève extension
+    name_no_ext = re.sub(r"\.[A-Za-z0-9]{2,4}$", "", name)
+    title = re.sub(r"\s+", " ", name_no_ext).strip()
+    if len(title) > TITLE_MAX:
+        title = title[:TITLE_MAX-1] + "…"
+    return title
+
+def run_upload(local_path: Path, title: str, description: str, tags: List[str]):
+    # On passe une catégorie fiable: 24 = Entertainment
     cmd = [
         "youtube-upload",
-        "--client-secrets", str(CLIENT_SECRETS),
-        "--credentials-file", str(CREDENTIALS),
+        "--client-secrets", "client_secrets.json",
+        "--credentials-file", "youtube_credentials.json",
         "--title", title,
-        "--description", desc,
+        "--description", description,
         "--tags", ",".join(tags),
-        "--category", "22",
-        "--privacy", "public",
+        "--category", str(YOUTUBE_CATEGORY),
+        "--privacy", DEFAULT_PRIVACY,
         str(local_path),
     ]
     print("RUN:", " ".join(cmd))
+    # On laisse remonter le code de retour (raise si !=0)
     subprocess.run(cmd, check=True)
 
+# =======================
+#   MAIN
+# =======================
 def main():
-    sch = ensure_today_schedule()
+    # Log simple pour suivre la cadence
     now = datetime.now(PARIS_TZ)
+    sch = ensure_today_schedule()
     print(f"🫀 Passage cron: {now:%Y-%m-%d %H:%M:%S} (Europe/Paris)")
-
     slot = should_post_now(sch)
+
+    # Mode test (Run workflow → force=true dans GitHub Actions)
     if not slot and os.environ.get("FORCE_POST") == "1":
         slot = {"hour": 99, "minute": 99, "posted": False}
+
     if not slot:
-        print(f"⏳ {now:%Y-%m-%d %H:%M} (Paris) — pas l'heure tirée. Prochain passage…")
+        print(f"⏳ {now:%Y-%m-%d %H:%M} (Paris) — pas l'heure tirée aujourd'hui. Prochain passage…")
         return
 
     print(f"🕒 Créneau déclenché: {slot['hour']:02d}:{slot['minute']:02d} (Europe/Paris)")
@@ -157,22 +202,20 @@ def main():
         return
 
     chosen = pick_one(files, used["used_ids"])
-    if not chosen:
-        print("Toutes les vidéos disponibles ont été utilisées, on repartira de zéro la prochaine fois.")
-        return
-
     print(f"🎯 Vidéo: {chosen['name']} ({chosen['id']})")
 
     tmpdir = Path(tempfile.mkdtemp())
     local = tmpdir / chosen["name"]
-    print("⬇️ Téléchargement…"); download_file(svc, chosen["id"], local)
+    print("⬇️ Téléchargement…")
+    download_file(svc, chosen["id"], local)
 
-    title = chosen["name"].rsplit(".", 1)[0][:95]
-    desc  = random.choice(DESCRIPTIONS)
-    tags  = ["shorts", "fun", "fr"]
+    title = sanitize_title(chosen["name"])
+    desc = random.choice(DESCRIPTIONS)
+    print(f"📝 Titre: {title}")
+    print(f"📝 Description: {desc}")
 
     try:
-        run_youtube_upload(local, title, desc, tags)
+        run_upload(local, title, desc, DEFAULT_TAGS)
         used["used_ids"].append(chosen["id"]); save_used(used)
         mark_posted(sch, slot)
         print("✅ Upload OK — état/plan du jour mis à jour.")
